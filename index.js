@@ -21,28 +21,33 @@ const allowedOrigins = [
   "http://localhost:5174",
 ];
 
-// Custom CORS middleware to ensure headers are always set
+// Custom CORS middleware to ensure headers are always set (runs first)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   
-  // Check if origin is allowed
-  if (!origin || allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  // Always set CORS headers (for debugging - can restrict later)
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-    );
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Requested-With, Accept"
-    );
-    res.setHeader("Access-Control-Max-Age", "86400");
-    
-    // Handle preflight requests
-    if (req.method === "OPTIONS") {
-      return res.status(200).end();
-    }
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
+  
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With, Accept, Origin"
+  );
+  res.setHeader("Access-Control-Max-Age", "86400");
+  res.setHeader("Access-Control-Expose-Headers", "Content-Range, X-Content-Range");
+  
+  // Handle preflight requests immediately
+  if (req.method === "OPTIONS") {
+    console.log("✅ OPTIONS preflight request from:", origin);
+    return res.status(200).end();
   }
   
   next();
