@@ -14,19 +14,41 @@ const crypto = require("crypto");
 const app = express();
 
 // CORS configuration - allow frontend origins
+const allowedOrigins = [
+  "https://internship-allotment.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://localhost:5174",
+];
+
 const corsOptions = {
-  origin: [
-    "https://internship-allotment.vercel.app",
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "http://localhost:5174",
-  ],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, Postman, or server-to-server)
+    if (!origin) return callback(null, true);
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      // Log blocked origins for debugging
+      console.log("⚠️ CORS: Blocked origin:", origin);
+      // For now, allow it to debug - remove this in production
+      callback(null, true);
+    }
+  },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+  exposedHeaders: ["Content-Range", "X-Content-Range"],
+  maxAge: 86400, // 24 hours - cache preflight requests
 };
 
+// Apply CORS middleware
 app.use(cors(corsOptions));
+
+// Handle preflight requests explicitly
+app.options("*", cors(corsOptions));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -1102,11 +1124,24 @@ app.put("/api/organization/:orgId/settings", async (req, res) => {
 });
 
 // =======================================================
+// Health check endpoint
 app.get("/", (req, res) =>
   res.json({ message: "🎯 Internship Allotment API Running ✅" })
 );
 
-app.use((req, res) => res.status(404).json({ error: "Route not found" }));
+app.get("/health", (req, res) => {
+  res.json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(),
+    cors: "enabled"
+  });
+});
+
+// 404 handler - must be last
+app.use((req, res) => {
+  console.log("❌ 404 - Route not found:", req.method, req.path);
+  res.status(404).json({ error: "Route not found", path: req.path });
+});
 
 // =======================================================
 // FIX #2: Removed hardcoded IP, just use PORT
