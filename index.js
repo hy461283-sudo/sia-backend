@@ -173,6 +173,7 @@ const projectSchema = new Schema(
     organizationId: { type: String, required: true },
     projectCode: String,
     projectName: String,
+    description: String, // Added: Project description field
     internsRequired: String,
     cgpaRequirement: String,
     discipline: String,
@@ -183,11 +184,28 @@ const projectSchema = new Schema(
     coordinatorPhone: String,
     coordinatorDesignation: String,
     guidelinesFilePath: String,
-    status: String,
+    status: { type: String, enum: ["draft", "scheduled", "active", "completed"], default: "draft" }, // Added: Status enum
     scheduledTime: String,
+    startDate: Date, // Added: Project start date
+    endDate: Date, // Added: Project end date
   },
   { timestamps: true }
 );
+
+// ---- Application Schema ----
+// Tracks student applications to projects for counting purposes
+const applicationSchema = new Schema(
+  {
+    projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Project", required: true },
+    studentId: { type: String, required: true },
+    status: { type: String, enum: ["pending", "accepted", "rejected"], default: "pending" },
+  },
+  { timestamps: true }
+);
+
+// Create index for efficient queries
+applicationSchema.index({ projectId: 1 });
+applicationSchema.index({ studentId: 1 });
 
 // ---- Notification Schema ----
 const notificationSchema = new Schema(
@@ -215,8 +233,52 @@ const Student = model("Student", studentSchema);
 const Admin = model("Admin", adminSchema);
 const Organization = model("Organization", organizationSchema);
 const Project = model("Project", projectSchema);
+const Application = model("Application", applicationSchema);
 const Notification = model("Notification", notificationSchema);
 const ResetToken = model("ResetToken", resetTokenSchema);
+
+// ====== Authentication Middleware ======
+/**
+ * Middleware to authenticate requests using Bearer token
+ * Extracts token from Authorization header and verifies organization
+ * Attaches organization data to req.organization for use in routes
+ * 
+ * Note: In production, replace this with JWT token verification
+ * For now, it accepts organizationId or username as the token
+ */
+const authenticateToken = async (req, res, next) => {
+  try {
+    // Extract token from Authorization header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Authorization token required. Format: Bearer <token>" });
+    }
+
+    const token = authHeader.substring(7); // Remove "Bearer " prefix
+
+    // In a production system, you would verify JWT tokens here
+    // For this implementation, we'll use the token as organizationId or username
+    // You can replace this with JWT verification if you have JWT setup
+    const org = await Organization.findOne({
+      $or: [
+        { _id: token },
+        { username: token },
+      ],
+    });
+
+    if (!org) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
+
+    // Attach organization to request object for use in routes
+    req.organization = org;
+    req.organizationId = org._id.toString();
+    next();
+  } catch (err) {
+    console.error("🔥 Authentication error:", err);
+    res.status(500).json({ error: "Authentication failed", details: err.message });
+  }
+};
 
 // ====== Twilio Setup ======
 const twilioClient = twilio(
@@ -941,82 +1003,295 @@ app.post("/api/organization/login", async (req, res) => {
   }
 });
 
-app.post("/api/organization/projects", upload.single("guidelines"), async (req, res) => {
+// =======================================================
+// ============= ORGANIZATION PROJECTS API ==============
+// =======================================================
+
+/**
+ * GET /api/organization/projects
+ * Returns a list of all projects with applications count
+ * Requires Bearer token authentication
+ */
+app.get("/api/organization/projects", authenticateToken, async (req, res) => {
   try {
-    const b = req.body;
-    const guidelinesFilePath = req.file ? req.file.path : null;
+    const organizationId = req.organizationId;
 
-    const project = await Project.create({
-      organizationId: b.organizationId,
-      projectCode: b.projectCode,
-      projectName: b.projectName,
-      internsRequired: b.interns,
-      cgpaRequirement: b.cgpaRequirement,
-      discipline: b.discipline,
-      skills: b.skills,
-      coordinatorName: b.coordinatorName,
-      coordinatorEmail: b.coordinatorEmail,
-      coordinatorAltEmail: b.coordinatorAltEmail,
-      coordinatorPhone: b.coordinatorPhone,
-      coordinatorDesignation: b.coordinatorDesignation,
-      guidelinesFilePath,
-      status: b.status,
-      scheduledTime: b.scheduled_time,
-    });
-
-    res.json({ message: "✅ Project saved successfully", projectId: project._id.toString() });
-  } catch (err) {
-    console.error("🔥 Add Project Error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/api/organization/projects/:orgId", async (req, res) => {
-  try {
-    const rows = await Project.find({ organizationId: req.params.orgId })
+    // Find all projects for this organization
+    const projects = await Project.find({ organizationId })
       .sort({ createdAt: -1 })
       .lean();
-    res.json(rows || []);
+
+    // Get applications count for each project
+    const projectsWithCounts = await Promise.all(
+      projects.map(async (project) => {
+        // Count applications for this project
+        const applicationsCount = await Application.countDocuments({
+          projectId: project._id,
+        });
+
+        // Format dates for response
+        const startDate = project.startDate ? new Date(project.startDate).toISOString().split('T')[0] : null;
+        const endDate = project.endDate ? new Date(project.endDate).toISOString().split('T')[0] : null;
+
+        return {
+          _id: project._id.toString(),
+          project_code: project.projectCode,
+          project_name: project.projectName,
+          status: project.status || "draft",
+          scheduled_time: project.scheduledTime || null,
+          description: project.description || "",
+          applications: applicationsCount, // Applications count
+          start_date: startDate,
+          end_date: endDate,
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt,
+        };
+      })
+    );
+
+    res.json(projectsWithCounts);
   } catch (err) {
-    console.error("🔥 Fetch Projects:", err);
-    res.status(500).json({ error: err.message });
+    console.error("🔥 GET /api/organization/projects error:", err);
+    res.status(500).json({ error: "Failed to fetch projects", details: err.message });
   }
 });
 
-app.put("/api/organization/projects/:id", async (req, res) => {
+/**
+ * POST /api/organization/projects
+ * Creates a new project draft
+ * Requires Bearer token authentication
+ * Fields: project_code, project_name, description, status ('draft'), optionally scheduled_time
+ */
+app.post("/api/organization/projects", authenticateToken, upload.single("guidelines"), async (req, res) => {
   try {
-    const b = req.body;
+    const organizationId = req.organizationId;
+    const { project_code, project_name, description, status, scheduled_time, start_date, end_date } = req.body;
 
-    await Project.findByIdAndUpdate(req.params.id, {
-      projectCode: b.projectCode,
-      projectName: b.projectName,
-      internsRequired: b.interns,
-      cgpaRequirement: b.cgpaRequirement,
-      discipline: b.discipline,
-      skills: b.skills,
-      coordinatorName: b.coordinatorName,
-      coordinatorEmail: b.coordinatorEmail,
-      coordinatorAltEmail: b.coordinatorAltEmail,
-      coordinatorPhone: b.coordinatorPhone,
-      coordinatorDesignation: b.coordinatorDesignation,
-      status: b.status,
-      scheduledTime: b.scheduled_time,
+    // Validate required fields
+    if (!project_code || !project_name) {
+      return res.status(400).json({ error: "project_code and project_name are required" });
+    }
+
+    // Ensure status is 'draft' for new projects
+    const projectStatus = status === "draft" ? "draft" : "draft";
+
+    // Parse dates if provided
+    let startDate = null;
+    let endDate = null;
+    if (start_date) {
+      startDate = new Date(start_date);
+      if (isNaN(startDate.getTime())) {
+        return res.status(400).json({ error: "Invalid start_date format" });
+      }
+    }
+    if (end_date) {
+      endDate = new Date(end_date);
+      if (isNaN(endDate.getTime())) {
+        return res.status(400).json({ error: "Invalid end_date format" });
+      }
+    }
+
+    // Validate date range
+    if (startDate && endDate && startDate > endDate) {
+      return res.status(400).json({ error: "start_date must be before end_date" });
+    }
+
+    const guidelinesFilePath = req.file ? req.file.path : null;
+
+    // Create new project
+    const project = await Project.create({
+      organizationId,
+      projectCode: project_code,
+      projectName: project_name,
+      description: description || "",
+      status: projectStatus,
+      scheduledTime: scheduled_time || null,
+      startDate: startDate,
+      endDate: endDate,
+      guidelinesFilePath,
+      // Include other fields if provided
+      internsRequired: req.body.internsRequired || null,
+      cgpaRequirement: req.body.cgpaRequirement || null,
+      discipline: req.body.discipline || null,
+      skills: req.body.skills || null,
+      coordinatorName: req.body.coordinatorName || null,
+      coordinatorEmail: req.body.coordinatorEmail || null,
+      coordinatorAltEmail: req.body.coordinatorAltEmail || null,
+      coordinatorPhone: req.body.coordinatorPhone || null,
+      coordinatorDesignation: req.body.coordinatorDesignation || null,
     });
 
-    res.json({ message: "✅ Project updated successfully" });
+    // Format response
+    const startDateFormatted = project.startDate ? new Date(project.startDate).toISOString().split('T')[0] : null;
+    const endDateFormatted = project.endDate ? new Date(project.endDate).toISOString().split('T')[0] : null;
+
+    res.status(201).json({
+      _id: project._id.toString(),
+      project_code: project.projectCode,
+      project_name: project.projectName,
+      status: project.status,
+      scheduled_time: project.scheduledTime,
+      description: project.description,
+      start_date: startDateFormatted,
+      end_date: endDateFormatted,
+      applications: 0, // New project has no applications yet
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+    });
   } catch (err) {
-    console.error("🔥 Project Update Error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("🔥 POST /api/organization/projects error:", err);
+    if (err.code === 11000) {
+      return res.status(400).json({ error: "Project code already exists" });
+    }
+    res.status(500).json({ error: "Failed to create project", details: err.message });
   }
 });
 
-app.delete("/api/organization/projects/:id", async (req, res) => {
+/**
+ * PUT /api/organization/projects/:id
+ * Updates an existing project by ID
+ * Requires Bearer token authentication
+ * Can update status from 'draft' to 'scheduled' and set scheduled_time
+ */
+app.put("/api/organization/projects/:id", authenticateToken, async (req, res) => {
   try {
-    await Project.findByIdAndDelete(req.params.id);
-    res.json({ message: "🗑️ Project deleted successfully" });
+    const organizationId = req.organizationId;
+    const projectId = req.params.id;
+    const { project_code, project_name, description, status, scheduled_time, start_date, end_date } = req.body;
+
+    // Find project and verify ownership
+    const project = await Project.findOne({ _id: projectId, organizationId });
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+
+    // Validate status transition: can only change from 'draft' to 'scheduled'
+    if (status && status !== project.status) {
+      if (project.status === "draft" && status === "scheduled") {
+        // Valid transition: draft -> scheduled
+        project.status = "scheduled";
+        // If scheduled_time is provided, update it
+        if (scheduled_time) {
+          project.scheduledTime = scheduled_time;
+        } else if (!project.scheduledTime) {
+          // If status is being set to scheduled but no scheduled_time provided, use current time
+          project.scheduledTime = new Date().toISOString();
+        }
+      } else if (status === "draft") {
+        // Can revert to draft
+        project.status = "draft";
+      } else {
+        return res.status(400).json({
+          error: `Invalid status transition from '${project.status}' to '${status}'. Only 'draft' to 'scheduled' is allowed.`,
+        });
+      }
+    }
+
+    // Update other fields if provided
+    if (project_code !== undefined) project.projectCode = project_code;
+    if (project_name !== undefined) project.projectName = project_name;
+    if (description !== undefined) project.description = description;
+    if (scheduled_time !== undefined && status !== "scheduled") {
+      // Only update scheduled_time if not already set by status change
+      project.scheduledTime = scheduled_time;
+    }
+
+    // Update dates if provided
+    if (start_date) {
+      const startDate = new Date(start_date);
+      if (isNaN(startDate.getTime())) {
+        return res.status(400).json({ error: "Invalid start_date format" });
+      }
+      project.startDate = startDate;
+    }
+    if (end_date) {
+      const endDate = new Date(end_date);
+      if (isNaN(endDate.getTime())) {
+        return res.status(400).json({ error: "Invalid end_date format" });
+      }
+      project.endDate = endDate;
+    }
+
+    // Validate date range
+    if (project.startDate && project.endDate && project.startDate > project.endDate) {
+      return res.status(400).json({ error: "start_date must be before end_date" });
+    }
+
+    // Update other optional fields
+    if (req.body.internsRequired !== undefined) project.internsRequired = req.body.internsRequired;
+    if (req.body.cgpaRequirement !== undefined) project.cgpaRequirement = req.body.cgpaRequirement;
+    if (req.body.discipline !== undefined) project.discipline = req.body.discipline;
+    if (req.body.skills !== undefined) project.skills = req.body.skills;
+    if (req.body.coordinatorName !== undefined) project.coordinatorName = req.body.coordinatorName;
+    if (req.body.coordinatorEmail !== undefined) project.coordinatorEmail = req.body.coordinatorEmail;
+    if (req.body.coordinatorAltEmail !== undefined) project.coordinatorAltEmail = req.body.coordinatorAltEmail;
+    if (req.body.coordinatorPhone !== undefined) project.coordinatorPhone = req.body.coordinatorPhone;
+    if (req.body.coordinatorDesignation !== undefined) project.coordinatorDesignation = req.body.coordinatorDesignation;
+
+    await project.save();
+
+    // Get applications count
+    const applicationsCount = await Application.countDocuments({ projectId: project._id });
+
+    // Format response
+    const startDateFormatted = project.startDate ? new Date(project.startDate).toISOString().split('T')[0] : null;
+    const endDateFormatted = project.endDate ? new Date(project.endDate).toISOString().split('T')[0] : null;
+
+    res.json({
+      _id: project._id.toString(),
+      project_code: project.projectCode,
+      project_name: project.projectName,
+      status: project.status,
+      scheduled_time: project.scheduledTime,
+      description: project.description,
+      applications: applicationsCount,
+      start_date: startDateFormatted,
+      end_date: endDateFormatted,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+    });
   } catch (err) {
-    console.error("🔥 Project Delete Error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("🔥 PUT /api/organization/projects/:id error:", err);
+    if (err.name === "CastError") {
+      return res.status(400).json({ error: "Invalid project ID format" });
+    }
+    res.status(500).json({ error: "Failed to update project", details: err.message });
+  }
+});
+
+/**
+ * DELETE /api/organization/projects/:id
+ * Deletes a project by ID
+ * Requires Bearer token authentication
+ * Also deletes all associated applications
+ */
+app.delete("/api/organization/projects/:id", authenticateToken, async (req, res) => {
+  try {
+    const organizationId = req.organizationId;
+    const projectId = req.params.id;
+
+    // Find project and verify ownership
+    const project = await Project.findOne({ _id: projectId, organizationId });
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+
+    // Delete all applications associated with this project
+    await Application.deleteMany({ projectId: project._id });
+
+    // Delete the project
+    await Project.findByIdAndDelete(projectId);
+
+    res.json({
+      message: "Project deleted successfully",
+      projectId: projectId,
+    });
+  } catch (err) {
+    console.error("🔥 DELETE /api/organization/projects/:id error:", err);
+    if (err.name === "CastError") {
+      return res.status(400).json({ error: "Invalid project ID format" });
+    }
+    res.status(500).json({ error: "Failed to delete project", details: err.message });
   }
 });
 
@@ -1032,59 +1307,112 @@ app.get("/api/organization/notifications/:orgId", async (req, res) => {
   }
 });
 
-app.put("/api/organization/:orgId/settings", async (req, res) => {
+/**
+ * PUT /api/organization/profile
+ * Updates organization profile data and password
+ * Requires Bearer token authentication
+ * Validates current password before allowing password change
+ */
+app.put("/api/organization/profile", authenticateToken, async (req, res) => {
   try {
-    const { orgId } = req.params;
-    const { name, email, currentPassword, newPassword } = req.body;
+    const organizationId = req.organizationId;
+    const { 
+      orgName, 
+      cinRegistrationNumber, 
+      country, 
+      state, 
+      detailedAddress,
+      coordinatorName,
+      coordinatorDesignation,
+      coordinatorEmail,
+      coordinatorAlternateEmail,
+      coordinatorPhone,
+      currentPassword,
+      newPassword 
+    } = req.body;
 
-    if (!name || !email) {
-      return res.status(400).json({ error: "Name and email are required." });
-    }
-
-    const org = await Organization.findById(orgId);
+    // Find organization
+    const org = await Organization.findById(organizationId);
     if (!org) {
-      return res.status(404).json({ error: "Organization not found." });
+      return res.status(404).json({ error: "Organization not found" });
     }
 
-    if (newPassword || currentPassword) {
-      if (!currentPassword || !newPassword) {
-        return res
-          .status(400)
-          .json({ error: "Current and new password are required." });
+    // Update profile fields if provided
+    if (orgName !== undefined) org.orgName = orgName;
+    if (cinRegistrationNumber !== undefined) org.cinRegistrationNumber = cinRegistrationNumber;
+    if (country !== undefined) org.country = country;
+    if (state !== undefined) org.state = state;
+    if (detailedAddress !== undefined) org.detailedAddress = detailedAddress;
+
+    // Update coordinator information if provided
+    if (coordinatorName !== undefined || coordinatorDesignation !== undefined || 
+        coordinatorEmail !== undefined || coordinatorAlternateEmail !== undefined || 
+        coordinatorPhone !== undefined) {
+      if (!org.coordinator) {
+        org.coordinator = {};
+      }
+      if (coordinatorName !== undefined) org.coordinator.name = coordinatorName;
+      if (coordinatorDesignation !== undefined) org.coordinator.designation = coordinatorDesignation;
+      if (coordinatorEmail !== undefined) org.coordinator.email = coordinatorEmail;
+      if (coordinatorAlternateEmail !== undefined) org.coordinator.alternateEmail = coordinatorAlternateEmail;
+      if (coordinatorPhone !== undefined) org.coordinator.phone = coordinatorPhone;
+    }
+
+    // Handle password change if requested
+    if (newPassword) {
+      // Validate that current password is provided
+      if (!currentPassword) {
+        return res.status(400).json({ 
+          error: "Current password is required to change password" 
+        });
       }
 
-      const valid = await bcrypt.compare(
+      // Validate current password
+      const isCurrentPasswordValid = await bcrypt.compare(
         currentPassword,
         org.passwordHash || ""
       );
-      if (!valid) {
-        return res.status(400).json({ error: "Current password is incorrect." });
+
+      if (!isCurrentPasswordValid) {
+        return res.status(401).json({ 
+          error: "Current password is incorrect" 
+        });
       }
 
-      org.passwordHash = await bcrypt.hash(newPassword, 10);
+      // Validate new password strength (optional - add your own rules)
+      if (newPassword.length < 6) {
+        return res.status(400).json({ 
+          error: "New password must be at least 6 characters long" 
+        });
+      }
+
+      // Hash and save new password
+      const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+      org.passwordHash = hashedNewPassword;
     }
 
-    org.orgName = name;
-    org.coordinator = {
-      ...(org.coordinator || {}),
-      email,
-    };
-
+    // Save updated organization
     await org.save();
 
     res.json({
-      message: "✅ Settings updated successfully",
+      message: "Profile updated successfully",
       organization: {
         organizationId: org._id.toString(),
+        username: org.username,
         orgName: org.orgName,
-        contactEmail: org.coordinator?.email,
+        cinRegistrationNumber: org.cinRegistrationNumber,
+        country: org.country,
+        state: org.state,
+        detailedAddress: org.detailedAddress,
+        coordinator: org.coordinator,
       },
     });
   } catch (err) {
-    console.error("🔥 Organization Settings Error:", err);
-    res
-      .status(500)
-      .json({ error: "Failed to update settings", details: err.message });
+    console.error("🔥 PUT /api/organization/profile error:", err);
+    res.status(500).json({ 
+      error: "Failed to update profile", 
+      details: err.message 
+    });
   }
 });
 
