@@ -14,9 +14,10 @@ const crypto = require("crypto");
 const app = express();
 
 // CORS middleware - must be before any routes
+// FIXED: Changed origin to match actual frontend URL with typo
 app.use(
   cors({
-    origin: "https://internship-allotment.vercel.app",
+    origin: "https://intership-allotment.vercel.app",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
@@ -58,10 +59,10 @@ if (mongoUri && !mongoUri.includes('/railway') && !mongoUri.includes('/sia') && 
 
 // MongoDB connection options for better reliability
 const mongooseOptions = {
-  serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
-  socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
-  maxPoolSize: 10, // Maintain up to 10 socket connections
-  minPoolSize: 2, // Maintain at least 2 socket connections
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
+  maxPoolSize: 10,
+  minPoolSize: 2,
   retryWrites: true,
   w: 'majority'
 };
@@ -70,13 +71,11 @@ mongoose
   .connect(mongoUri, mongooseOptions)
   .then(() => {
     console.log("✅ Connected to MongoDB");
-    console.log("📍 MongoDB URI:", mongoUri.replace(/\/\/.*@/, "//***:***@")); // Hide credentials in logs
+    console.log("📍 MongoDB URI:", mongoUri.replace(/\/\/.*@/, "//***:***@"));
   })
   .catch((err) => {
     console.error("❌ MongoDB connection failed:", err.message);
     console.error("🔍 Full error:", err);
-    // Don't exit - let the server start anyway (for graceful degradation)
-    // The server will retry connections on each request
   });
 
 // Handle MongoDB connection events
@@ -241,9 +240,6 @@ const transporter = nodemailer.createTransport({
 // =================== STUDENT SECTION ===================
 // =======================================================
 
-/* ======================================================
-   FETCH STUDENT PROFILE
-   ====================================================== */
 app.get("/api/student/profile", async (req, res) => {
   try {
     const { studentId } = req.query;
@@ -278,9 +274,6 @@ app.get("/api/student/profile", async (req, res) => {
   }
 });
 
-/* ======================================================
-   UPDATE STUDENT PROFILE (MongoDB + file paths)
-   ====================================================== */
 app.post(
   "/api/student/update-profile",
   upload.fields([
@@ -311,7 +304,6 @@ app.post(
         skills,
       } = req.body;
 
-      // Text fields
       if (fullName !== undefined) student.fullName = fullName;
       if (dob !== undefined) student.dob = dob;
       if (email !== undefined) student.email = email;
@@ -327,7 +319,6 @@ app.post(
       if (cgpa !== undefined) student.academic.cgpa = cgpa;
       if (skills !== undefined) student.academic.skills = skills;
 
-      // Files: keep on disk and store paths
       if (req.files?.photo?.[0]) {
         student.photoPath = req.files.photo[0].path;
       }
@@ -345,9 +336,6 @@ app.post(
   }
 );
 
-/* ======================================================
-   SERVE FILES FROM DISK (Mongo stores file paths)
-   ====================================================== */
 app.get("/api/student/file/:type/:studentId", async (req, res) => {
   try {
     const { type, studentId } = req.params;
@@ -394,17 +382,14 @@ app.post("/api/auth/forgot-password", async (req, res) => {
 
     console.log("📨 Forgot password requested for:", email);
 
-    // 1️⃣ -- Check Student collection --
     const student = await Student.findOne({
       $or: [{ email }, { alternateEmail: email }],
     }).lean();
 
-    // 2️⃣ -- Check Admin collection --
     const admin = !student
       ? await Admin.findOne({ emailAddress: email }).lean()
       : null;
 
-    // 3️⃣ -- Check Organization via coordinator details --
     const org = !student && !admin
       ? await Organization.findOne({
           $or: [
@@ -426,12 +411,10 @@ app.post("/api/auth/forgot-password", async (req, res) => {
     else if (org) userType = "org";
     else return res.status(404).json({ error: "Email not found." });
 
-    // 🧹 Delete old reset requests for this email
     await ResetToken.deleteMany({ email });
 
-    // Generate new token & expiration
     const token = crypto.randomBytes(32).toString("hex");
-    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+    const expires = new Date(Date.now() + 10 * 60 * 1000);
 
     await ResetToken.create({
       email,
@@ -472,9 +455,6 @@ app.post("/api/auth/forgot-password", async (req, res) => {
   }
 });
 
-/* ======================================================
-   VERIFY or DENY EMAIL LINKS (MongoDB)
-   ====================================================== */
 app.get("/verify-reset", async (req, res) => {
   try {
     const { token } = req.query;
@@ -512,9 +492,6 @@ app.get("/deny-reset", async (req, res) => {
   }
 });
 
-/* ======================================================
-   POLL RESET STATUS (MongoDB)
-   ====================================================== */
 app.get("/api/auth/reset-status/:email", async (req, res) => {
   try {
     const { email } = req.params;
@@ -530,10 +507,6 @@ app.get("/api/auth/reset-status/:email", async (req, res) => {
   }
 });
 
-/* ======================================================
-   RESET PASSWORD (MongoDB)
-   ====================================================== */
-// keep /api/auth/reset for compatibility and add /api/auth/reset-password for frontend
 const resetPasswordHandler = async (req, res) => {
   try {
     const { token, password } = req.body;
@@ -589,11 +562,6 @@ const resetPasswordHandler = async (req, res) => {
 app.post("/api/auth/reset", resetPasswordHandler);
 app.post("/api/auth/reset-password", resetPasswordHandler);
 
-// ====== File Upload (Multer) ======
-
-// ===== Utilities =====
-const formatPhone = (phone) => (!phone.startsWith("+") ? `+91${phone}` : phone);
-
 // =======================================================
 // ====================== ADMIN SECTION ==================
 // =======================================================
@@ -607,8 +575,7 @@ app.post(
   ]),
   async (req, res) => {
     try {
-      const { adminId, fullName, email, phone, designation, password } =
-        req.body;
+      const { adminId, fullName, email, phone, designation, password } = req.body;
 
       if (!adminId || !fullName || !email || !phone || !designation || !password)
         return res.status(400).json({ error: "All fields are required." });
@@ -637,14 +604,11 @@ app.post(
       res.json({ message: "✅ Admin registered successfully!" });
     } catch (err) {
       console.error("🔥 Admin Register Error:", err);
-      res
-        .status(500)
-        .json({ error: "Registration failed.", details: err.message });
+      res.status(500).json({ error: "Registration failed.", details: err.message });
     }
   }
 );
 
-// ---- Admin Login ----
 app.post("/api/admin/login", async (req, res) => {
   try {
     const { admin_id, password } = req.body;
@@ -671,11 +635,10 @@ app.post("/api/admin/login", async (req, res) => {
   }
 });
 
-// ---- Admin OTP ----
 app.post("/api/admin/send-otp", async (req, res) => {
   try {
     const { phone } = req.body;
-    const formatted = formatPhone(phone);
+    const formatted = (!phone.startsWith("+") ? `+91${phone}` : phone);
 
     const admin = await Admin.findOne({ contactNumber: phone }).lean();
     if (!admin)
@@ -694,7 +657,7 @@ app.post("/api/admin/send-otp", async (req, res) => {
 app.post("/api/admin/verify-otp", async (req, res) => {
   try {
     const { phone, otp } = req.body;
-    const formatted = formatPhone(phone);
+    const formatted = (!phone.startsWith("+") ? `+91${phone}` : phone);
 
     const check = await twilioClient.verify
       .services(serviceSid)
@@ -708,13 +671,10 @@ app.post("/api/admin/verify-otp", async (req, res) => {
   }
 });
 
-// Student OTP
-
-// ---- Student OTP Route (MongoDB) ----
 app.post("/api/student/send-otp", async (req, res) => {
   try {
     let { phone } = req.body;
-    const formatted = formatPhone(phone);
+    const formatted = (!phone.startsWith("+") ? `+91${phone}` : phone);
 
     const cleanPhone = phone.replace(/\D/g, "");
     const normalized = formatted.replace("+", "");
@@ -743,7 +703,7 @@ app.post("/api/student/send-otp", async (req, res) => {
 app.post("/api/student/verify-otp", async (req, res) => {
   try {
     const { phone, otp } = req.body;
-    const formatted = formatPhone(phone);
+    const formatted = (!phone.startsWith("+") ? `+91${phone}` : phone);
 
     const check = await twilioClient.verify
       .services(serviceSid)
@@ -953,7 +913,6 @@ app.post(
   }
 );
 
-// ---- Organization Login ----
 app.post("/api/organization/login", async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -982,8 +941,6 @@ app.post("/api/organization/login", async (req, res) => {
   }
 });
 
-// ---------- ORGANIZATION PROJECT ROUTES ----------
-// ---------- ADD PROJECT ----------
 app.post("/api/organization/projects", upload.single("guidelines"), async (req, res) => {
   try {
     const b = req.body;
@@ -1014,7 +971,6 @@ app.post("/api/organization/projects", upload.single("guidelines"), async (req, 
   }
 });
 
-// ---------- READ (LIST PROJECTS) ----------
 app.get("/api/organization/projects/:orgId", async (req, res) => {
   try {
     const rows = await Project.find({ organizationId: req.params.orgId })
@@ -1027,7 +983,6 @@ app.get("/api/organization/projects/:orgId", async (req, res) => {
   }
 });
 
-// ---------- UPDATE (EDIT) ----------
 app.put("/api/organization/projects/:id", async (req, res) => {
   try {
     const b = req.body;
@@ -1055,7 +1010,6 @@ app.put("/api/organization/projects/:id", async (req, res) => {
   }
 });
 
-// ---------- DELETE ----------
 app.delete("/api/organization/projects/:id", async (req, res) => {
   try {
     await Project.findByIdAndDelete(req.params.id);
@@ -1066,7 +1020,6 @@ app.delete("/api/organization/projects/:id", async (req, res) => {
   }
 });
 
-// ---------- NOTIFICATIONS ----------
 app.get("/api/organization/notifications/:orgId", async (req, res) => {
   try {
     const rows = await Notification.find({ organizationId: req.params.orgId })
@@ -1079,7 +1032,6 @@ app.get("/api/organization/notifications/:orgId", async (req, res) => {
   }
 });
 
-// ---------- ORGANIZATION SETTINGS ----------
 app.put("/api/organization/:orgId/settings", async (req, res) => {
   try {
     const { orgId } = req.params;
@@ -1094,7 +1046,6 @@ app.put("/api/organization/:orgId/settings", async (req, res) => {
       return res.status(404).json({ error: "Organization not found." });
     }
 
-    // Optional password change
     if (newPassword || currentPassword) {
       if (!currentPassword || !newPassword) {
         return res
@@ -1113,7 +1064,6 @@ app.put("/api/organization/:orgId/settings", async (req, res) => {
       org.passwordHash = await bcrypt.hash(newPassword, 10);
     }
 
-    // Always update org name + contact email
     org.orgName = name;
     org.coordinator = {
       ...(org.coordinator || {}),
@@ -1162,7 +1112,6 @@ app.use((req, res) => {
 // Server setup - Railway sets PORT automatically
 const PORT = process.env.PORT || 5050;
 
-// Graceful shutdown handling
 process.on('SIGTERM', () => {
   console.log('⚠️ SIGTERM received. Shutting down gracefully...');
   mongoose.connection.close(false, () => {
@@ -1179,22 +1128,18 @@ process.on('SIGINT', () => {
   });
 });
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
   console.error('❌ Uncaught Exception:', err);
-  // Don't exit - let Railway handle it
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit - let Railway handle it
 });
 
 const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
-// Handle server errors
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`❌ Port ${PORT} is already in use`);
