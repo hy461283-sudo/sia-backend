@@ -118,7 +118,15 @@ const upload = multer({ storage });
 
 // ====== MongoDB (Mongoose) Connection & Schemas ======
 // FIX #1: Changed MONGODB_URI to MONGO_URL (matches Railway env var)
-const mongoUri = process.env.MONGO_URL || "mongodb://127.0.0.1:27017/sia";
+// Railway MongoDB connection string format: mongodb://mongo:PASSWORD@mongodb.railway.internal:27017
+// If no database name is provided, default to 'railway' or 'sia'
+let mongoUri = process.env.MONGO_URL || "mongodb://127.0.0.1:27017/sia";
+
+// Ensure database name is included in connection string
+if (mongoUri && !mongoUri.includes('/railway') && !mongoUri.includes('/sia') && !mongoUri.match(/\/[^\/]+$/)) {
+  // Add default database name if not present
+  mongoUri = mongoUri.endsWith('/') ? mongoUri + 'railway' : mongoUri + '/railway';
+}
 
 // MongoDB connection options for better reliability
 const mongooseOptions = {
