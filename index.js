@@ -120,10 +120,41 @@ const upload = multer({ storage });
 // FIX #1: Changed MONGODB_URI to MONGO_URL (matches Railway env var)
 const mongoUri = process.env.MONGO_URL || "mongodb://127.0.0.1:27017/sia";
 
+// MongoDB connection options for better reliability
+const mongooseOptions = {
+  serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+  socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+  maxPoolSize: 10, // Maintain up to 10 socket connections
+  minPoolSize: 2, // Maintain at least 2 socket connections
+  retryWrites: true,
+  w: 'majority'
+};
+
 mongoose
-  .connect(mongoUri)
-  .then(() => console.log("✅ Connected to MongoDB"))
-  .catch((err) => console.error("❌ MongoDB connection failed:", err));
+  .connect(mongoUri, mongooseOptions)
+  .then(() => {
+    console.log("✅ Connected to MongoDB");
+    console.log("📍 MongoDB URI:", mongoUri.replace(/\/\/.*@/, "//***:***@")); // Hide credentials in logs
+  })
+  .catch((err) => {
+    console.error("❌ MongoDB connection failed:", err.message);
+    console.error("🔍 Full error:", err);
+    // Don't exit - let the server start anyway (for graceful degradation)
+    // The server will retry connections on each request
+  });
+
+// Handle MongoDB connection events
+mongoose.connection.on('error', (err) => {
+  console.error("❌ MongoDB connection error:", err.message);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.warn("⚠️ MongoDB disconnected. Attempting to reconnect...");
+});
+
+mongoose.connection.on('reconnected', () => {
+  console.log("✅ MongoDB reconnected");
+});
 
 const { Schema, model } = mongoose;
 
@@ -1195,6 +1226,45 @@ app.use((req, res) => {
 // FIX #2: Removed hardcoded IP, just use PORT
 const PORT = process.env.PORT || 5050;
 
-app.listen(PORT, "0.0.0.0", () => {
+// Graceful shutdown handling
+process.on('SIGTERM', () => {
+  console.log('⚠️ SIGTERM received. Shutting down gracefully...');
+  mongoose.connection.close(false, () => {
+    console.log('✅ MongoDB connection closed.');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('⚠️ SIGINT received. Shutting down gracefully...');
+  mongoose.connection.close(false, () => {
+    console.log('✅ MongoDB connection closed.');
+    process.exit(0);
+  });
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught Exception:', err);
+  // Don't exit - let Railway handle it
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit - let Railway handle it
+});
+
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on port ${PORT}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`📦 MongoDB URI configured: ${process.env.MONGO_URL ? 'Yes' : 'No (using default)'}`);
+});
+
+// Handle server errors
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use`);
+  } else {
+    console.error('❌ Server error:', err);
+  }
 });
