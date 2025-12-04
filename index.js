@@ -12,7 +12,21 @@ const nodemailer = require("nodemailer");
 const crypto = require("crypto");
 
 const app = express();
-app.use(cors());
+
+// CORS configuration - allow frontend origins
+const corsOptions = {
+  origin: [
+    "https://internship-allotment.vercel.app",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:5174",
+  ],
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
