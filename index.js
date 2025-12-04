@@ -16,13 +16,13 @@ const app = express();
 // CORS middleware - must be before any routes
 app.use(
   cors({
-    origin: ["https://internship-allotment.vercel.app"],
+    origin: "https://internship-allotment.vercel.app",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   })
 );
 
-// Handle preflight OPTIONS requests
 app.options("*", cors());
 
 app.use(express.json());
@@ -1191,7 +1191,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
 
 // Handle server errors
