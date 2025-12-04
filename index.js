@@ -21,6 +21,34 @@ const allowedOrigins = [
   "http://localhost:5174",
 ];
 
+// Custom CORS middleware to ensure headers are always set
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  
+  // Check if origin is allowed
+  if (!origin || allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+    );
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Requested-With, Accept"
+    );
+    res.setHeader("Access-Control-Max-Age", "86400");
+    
+    // Handle preflight requests
+    if (req.method === "OPTIONS") {
+      return res.status(200).end();
+    }
+  }
+  
+  next();
+});
+
+// Also use cors middleware as backup
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps, Postman, or server-to-server)
@@ -32,7 +60,7 @@ const corsOptions = {
     } else {
       // Log blocked origins for debugging
       console.log("⚠️ CORS: Blocked origin:", origin);
-      // For now, allow it to debug - remove this in production
+      // Allow all for now to debug
       callback(null, true);
     }
   },
@@ -40,14 +68,29 @@ const corsOptions = {
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
   exposedHeaders: ["Content-Range", "X-Content-Range"],
-  maxAge: 86400, // 24 hours - cache preflight requests
+  maxAge: 86400,
 };
 
-// Apply CORS middleware
 app.use(cors(corsOptions));
 
-// Handle preflight requests explicitly
-app.options("*", cors(corsOptions));
+// Explicit OPTIONS handler for all routes
+app.options("*", (req, res) => {
+  const origin = req.headers.origin;
+  if (!origin || allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+    );
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Requested-With, Accept"
+    );
+    res.setHeader("Access-Control-Max-Age", "86400");
+  }
+  res.status(200).end();
+});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
