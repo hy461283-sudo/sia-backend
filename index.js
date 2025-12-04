@@ -1028,6 +1028,65 @@ app.get("/api/organization/notifications/:orgId", async (req, res) => {
   }
 });
 
+// ---------- ORGANIZATION SETTINGS ----------
+app.put("/api/organization/:orgId/settings", async (req, res) => {
+  try {
+    const { orgId } = req.params;
+    const { name, email, currentPassword, newPassword } = req.body;
+
+    if (!name || !email) {
+      return res.status(400).json({ error: "Name and email are required." });
+    }
+
+    const org = await Organization.findById(orgId);
+    if (!org) {
+      return res.status(404).json({ error: "Organization not found." });
+    }
+
+    // Optional password change
+    if (newPassword || currentPassword) {
+      if (!currentPassword || !newPassword) {
+        return res
+          .status(400)
+          .json({ error: "Current and new password are required." });
+      }
+
+      const valid = await bcrypt.compare(
+        currentPassword,
+        org.passwordHash || ""
+      );
+      if (!valid) {
+        return res.status(400).json({ error: "Current password is incorrect." });
+      }
+
+      org.passwordHash = await bcrypt.hash(newPassword, 10);
+    }
+
+    // Always update org name + contact email
+    org.orgName = name;
+    org.coordinator = {
+      ...(org.coordinator || {}),
+      email,
+    };
+
+    await org.save();
+
+    res.json({
+      message: "✅ Settings updated successfully",
+      organization: {
+        organizationId: org._id.toString(),
+        orgName: org.orgName,
+        contactEmail: org.coordinator?.email,
+      },
+    });
+  } catch (err) {
+    console.error("🔥 Organization Settings Error:", err);
+    res
+      .status(500)
+      .json({ error: "Failed to update settings", details: err.message });
+  }
+});
+
 // =======================================================
 app.get("/", (req, res) =>
   res.json({ message: "🎯 Internship Allotment API Running ✅" })
