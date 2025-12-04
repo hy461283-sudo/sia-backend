@@ -1160,7 +1160,7 @@ app.use((req, res) => {
 
 // =======================================================
 // Server setup - Railway sets PORT automatically
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5050;
 
 // Graceful shutdown handling
 process.on('SIGTERM', () => {
