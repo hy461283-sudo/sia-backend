@@ -13,89 +13,17 @@ const crypto = require("crypto");
 
 const app = express();
 
-// CORS configuration - allow frontend origins
-const allowedOrigins = [
-  "https://internship-allotment.vercel.app",
-  "http://localhost:5173",
-  "http://localhost:3000",
-  "http://localhost:5174",
-];
+// CORS middleware - must be before any routes
+app.use(
+  cors({
+    origin: ["https://internship-allotment.vercel.app"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    credentials: true,
+  })
+);
 
-// Custom CORS middleware to ensure headers are always set (runs first)
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  
-  // Always set CORS headers (for debugging - can restrict later)
-  if (origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-  } else {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-  }
-  
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-  );
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Requested-With, Accept, Origin"
-  );
-  res.setHeader("Access-Control-Max-Age", "86400");
-  res.setHeader("Access-Control-Expose-Headers", "Content-Range, X-Content-Range");
-  
-  // Handle preflight requests immediately
-  if (req.method === "OPTIONS") {
-    console.log("✅ OPTIONS preflight request from:", origin);
-    return res.status(200).end();
-  }
-  
-  next();
-});
-
-// Also use cors middleware as backup
-const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps, Postman, or server-to-server)
-    if (!origin) return callback(null, true);
-    
-    // Check if origin is in allowed list
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      // Log blocked origins for debugging
-      console.log("⚠️ CORS: Blocked origin:", origin);
-      // Allow all for now to debug
-      callback(null, true);
-    }
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
-  exposedHeaders: ["Content-Range", "X-Content-Range"],
-  maxAge: 86400,
-};
-
-app.use(cors(corsOptions));
-
-// Explicit OPTIONS handler for all routes
-app.options("*", (req, res) => {
-  const origin = req.headers.origin;
-  if (!origin || allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin || "*");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-    );
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Requested-With, Accept"
-    );
-    res.setHeader("Access-Control-Max-Age", "86400");
-  }
-  res.status(200).end();
-});
+// Handle preflight OPTIONS requests
+app.options("*", cors());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -1231,8 +1159,8 @@ app.use((req, res) => {
 });
 
 // =======================================================
-// FIX #2: Removed hardcoded IP, just use PORT
-const PORT = process.env.PORT || 5050;
+// Server setup - Railway sets PORT automatically
+const PORT = process.env.PORT || 5000;
 
 // Graceful shutdown handling
 process.on('SIGTERM', () => {
@@ -1262,10 +1190,8 @@ process.on('unhandledRejection', (reason, promise) => {
   // Don't exit - let Railway handle it
 });
 
-const server = app.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`📦 MongoDB URI configured: ${process.env.MONGO_URL ? 'Yes' : 'No (using default)'}`);
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
 
 // Handle server errors
